@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.log
+
+# opcional (se quiser evitar subir tudo)
+# data/json/*
