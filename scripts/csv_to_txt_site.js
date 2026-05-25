@@ -6,11 +6,10 @@ const { exec } = require("child_process");
 const resultados = [];
 
 // pastas de saída
-const OUTPUT_JSON = "../data/json";
 const OUTPUT_TXT = "../data/txt";
 
 // criar pastas se não existirem
-[OUTPUT_JSON, OUTPUT_TXT].forEach(dir => {
+[OUTPUT_TXT].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -108,11 +107,6 @@ fs.createReadStream("../data/acordaos.csv")
 
     const nome = gerarNomeArquivo(acordao);
 
-    // ✅ JSON
-    fs.writeFileSync(
-      path.join(OUTPUT_JSON, `${nome}.json`),
-      JSON.stringify(objeto, null, 2)
-    );
 
     // ✅ TXT (🔥 ESSENCIAL PARA IA)
     fs.writeFileSync(
@@ -127,22 +121,58 @@ fs.createReadStream("../data/acordaos.csv")
       "../data/acordaos_final.json",
       JSON.stringify(resultados, null, 2)
     );
-
-    console.log(`✅ JSON gerado em: ${OUTPUT_JSON}`);
+  
+    
     console.log(`✅ TXT gerado em: ${OUTPUT_TXT}`);
     console.log(`✅ Total de acórdãos: ${resultados.length}`);
-
-    // copiar TXT (usar para SharePoint)
-    const comando = "cp -r /home/hitalo/dev/agente_ia/data/txt /mnt/c/Users/hitalo.diniz/Downloads/";
-
-    exec(comando, (error, stdout, stderr) => {
-      if (error) {
-        console.error("❌ Erro ao copiar:", error.message);
-        return;
-      }
-      if (stderr) {
-        console.warn("⚠️ Aviso:", stderr);
-      }
-      console.log("✅ TXT copiado para Downloads!");
+  
+    // 🔥 GERAR INDEX.HTML AUTOMÁTICO
+    let lista = resultados.map(a => {
+      const nome = gerarNomeArquivo(a.acordao);
+      return `<li><a href="${nome}.txt">${a.acordao} - ${a.materia}</a></li>`;
+    }).join("\n");
+  
+    const html = `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Acórdãos CCMG</title>
+  </head>
+  <body>
+    <h1>Base de Acórdãos CCMG</h1>
+  
+    <p>Total: ${resultados.length} acórdãos</p>
+  
+    <ul>
+      ${lista}
+    </ul>
+  
+  </body>
+  </html>
+  `;
+  
+    // salvar index.html na pasta docs
+    const docsDir = "../docs";
+  
+    if (!fs.existsSync(docsDir)) {
+      fs.mkdirSync(docsDir, { recursive: true });
+    }
+  
+    // copiar txt para docs também
+    fs.readdirSync(OUTPUT_TXT).forEach(file => {
+      fs.copyFileSync(
+        path.join(OUTPUT_TXT, file),
+        path.join(docsDir, file)
+      );
     });
+  
+    fs.writeFileSync(
+      path.join(docsDir, "index.html"),
+      html
+    );
+  
+    console.log("✅ index.html gerado automaticamente!");
+  
   });
+  ``
