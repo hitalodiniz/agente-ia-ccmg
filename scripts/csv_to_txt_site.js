@@ -166,41 +166,82 @@ fs.createReadStream("../data/acordaos.csv")
       stats[r] = (stats[r] || 0) + 1;
     });
 
+    // ✅ gerar tese (melhorada)
     let tese = "Indefinida";
-    if ((stats.procedente || 0) > (stats.improcedente || 0))
-      tese = "Predominância favorável ao Fisco";
-    else if ((stats.improcedente || 0) > (stats.procedente || 0))
-      tese = "Predominância favorável ao contribuinte";
 
-    const exemplos = acordaos.slice(0, 20)
-      .map(a => `<li>${a.acordao} - ${a.resultado_material}</li>`)
-      .join("");
+    if ((stats.procedente || 0) > (stats.improcedente || 0)) {
+      tese = "Predominância de entendimento favorável ao Fisco quanto à exigência do imposto.";
+    } else if ((stats.improcedente || 0) > (stats.procedente || 0)) {
+      tese = "Predominância de entendimento favorável ao contribuinte.";
+    }
+
+    // ✅ título legível (sem slug)
+
+    const titulo = grupo
+    .split("/")
+    .map(x => x.replace(/_/g, " "))
+    .join(" - ")
+    .toUpperCase();
+  
+
+    // ✅ ementas (ESSENCIAL para IA)
+    const ementas = acordaos.slice(0, 30).map(a => `
+      <div style="margin-bottom:20px;">
+        <h3>${a.acordao} - ${a.resultado_material}</h3>
+        <p>${(a.ementa || "").substring(0, 1000)}</p>
+      </div>
+    `).join("");
+
+
+    const palavrasChave = [
+      ...new Set(
+        (grupo.replace(/\//g, " ") + " " + acordaos.map(a => a.topico).join(" "))
+          .toLowerCase()
+          .replace(/[^\w\s]/g, " ")
+          .split(/\s+/)
+          .filter(w => w.length > 3)
+      )
+    ].slice(0, 25).join(", ");
+    
 
     const html = `
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"></head>
-<body>
+<head>
+<meta charset="UTF-8">
+<script src="https://cdn.tailwindcss.com"></script>
+<title>${titulo}</title>
+</head>
 
-<h1>${grupo}</h1>
+<body class="bg-gray-100 text-gray-800">
+<div class="max-w-5xl mx-auto p-6">
 
-<p><b>Total:</b> ${acordaos.length}</p>
-<p>Mostrando ${Math.min(20, acordaos.length)} exemplos</p>
+<h1 class="text-2xl font-bold mb-4">${titulo}</h1>
 
-<h2>Período</h2>
-<ul>
-<li>Primeiro: ${minObj?.acordao} (${formatarData(parseData(minObj?.data))})</li>
-<li>Último: ${maxObj?.acordao} (${formatarData(parseData(maxObj?.data))})</li>
-</ul>
+<p><b>Total de acórdãos:</b> ${acordaos.length}</p>
+<p><b>Período:</b> ${formatarData(minObj ? parseData(minObj.data) : null)} até ${formatarData(minObj ? parseData(maxObj.data) : null)}</p>
 
-<h2>Estatísticas</h2>
-<pre>${JSON.stringify(stats, null, 2)}</pre>
+<h2 class="text-xl font-semibold mt-6">Tese do CCMG</h2>
+<p class="mb-4">${tese}</p>
 
-<h2>Tese</h2>
-<p>${tese}</p>
 
-<ul>${exemplos}</ul>
+<h2 class="text-xl font-semibold mt-6">Resumo do entendimento</h2>
+<p>
+Com base na análise dos acórdãos acima, observa-se ${tese.toLowerCase()}.
+O padrão decisório indica que a maioria das decisões segue essa orientação.
+</p>
 
+
+<h2 class="text-xl font-semibold mt-6">Distribuição dos resultados</h2>
+<pre class="bg-white p-2 rounded">${JSON.stringify(stats, null, 2)}</pre>
+
+<h2 class="text-xl font-semibold mt-6">Acórdãos relevantes</h2>
+${ementas}
+
+<h2 class="text-xl font-semibold mt-6">Palavras-chave</h2>
+<p>${palavrasChave}</p>
+
+</div>
 </body>
 </html>
 `;
@@ -310,6 +351,6 @@ ${Object.entries(menuFinal).map(([materia, subs]) => `
     path.join(DOCS_DIR, "index.json"),
     JSON.stringify(index, null, 2)
   );
-  
+
   console.log("✅ Sistema completo corrigido!");
 });
