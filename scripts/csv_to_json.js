@@ -5,13 +5,16 @@ const { exec } = require("child_process");
 
 const resultados = [];
 
-// pasta de saída
-const OUTPUT_DIR = "../data/json";
+// pastas de saída
+const OUTPUT_JSON = "../data/json";
+const OUTPUT_TXT = "../data/txt";
 
-// garantir que a pasta existe
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-}
+// criar pastas se não existirem
+[OUTPUT_JSON, OUTPUT_TXT].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
 
 // limpeza de texto
 function limparTexto(txt) {
@@ -38,7 +41,7 @@ function extrairTipoResultado(texto) {
   return "outro";
 }
 
-// gerar nome seguro de arquivo
+// nome seguro de arquivo
 function gerarNomeArquivo(acordao) {
   if (!acordao) return "desconhecido";
 
@@ -46,6 +49,25 @@ function gerarNomeArquivo(acordao) {
     .trim()
     .replace(/[^\w]/g, "")
     .toLowerCase();
+}
+
+// gerar texto para IA (IMPORTANTE)
+function gerarTexto(obj) {
+  return `
+ACÓRDÃO: ${obj.acordao}
+DATA: ${obj.data}
+RITO: ${obj.rito}
+
+MATÉRIA: ${obj.materia}
+SUBTÍTULO: ${obj.subtitulo}
+TÓPICO: ${obj.topico}
+
+RESULTADO:
+${obj.resultado}
+
+EMENTA:
+${obj.ementa}
+`.trim();
 }
 
 // leitura do CSV
@@ -84,12 +106,18 @@ fs.createReadStream("../data/acordaos.csv")
 
     resultados.push(objeto);
 
-    // gerar arquivo individual
-    const nomeArquivo = gerarNomeArquivo(acordao);
+    const nome = gerarNomeArquivo(acordao);
 
+    // ✅ JSON
     fs.writeFileSync(
-      path.join(OUTPUT_DIR, `${nomeArquivo}.json`),
+      path.join(OUTPUT_JSON, `${nome}.json`),
       JSON.stringify(objeto, null, 2)
+    );
+
+    // ✅ TXT (🔥 ESSENCIAL PARA IA)
+    fs.writeFileSync(
+      path.join(OUTPUT_TXT, `${nome}.txt`),
+      gerarTexto(objeto)
     );
   })
   .on("end", () => {
@@ -100,21 +128,21 @@ fs.createReadStream("../data/acordaos.csv")
       JSON.stringify(resultados, null, 2)
     );
 
-    console.log(`✅ Arquivos individuais gerados em: ${OUTPUT_DIR}`);
+    console.log(`✅ JSON gerado em: ${OUTPUT_JSON}`);
+    console.log(`✅ TXT gerado em: ${OUTPUT_TXT}`);
     console.log(`✅ Total de acórdãos: ${resultados.length}`);
 
-    // 🔥 COMANDO DE CÓPIA AUTOMÁTICO
-    const comando = "cp -r /home/hitalo/dev/agente_ia/data/json /mnt/c/Users/hitalo.diniz/Downloads/";
+    // copiar TXT (usar para SharePoint)
+    const comando = "cp -r /home/hitalo/dev/agente_ia/data/txt /mnt/c/Users/hitalo.diniz/Downloads/";
 
     exec(comando, (error, stdout, stderr) => {
       if (error) {
-        console.error("❌ Erro ao copiar arquivos:", error.message);
+        console.error("❌ Erro ao copiar:", error.message);
         return;
       }
       if (stderr) {
-        console.error("⚠️ Aviso:", stderr);
-        return;
+        console.warn("⚠️ Aviso:", stderr);
       }
-      console.log("✅ Arquivos copiados para Downloads com sucesso!");
+      console.log("✅ TXT copiado para Downloads!");
     });
   });
