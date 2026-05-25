@@ -1,9 +1,11 @@
 export default async function handler(req, res) {
 
   const query = (req.query.q || "").toLowerCase();
+  console.log("QUERY RECEBIDA:", query);
+  console.log(`URL CHAMADA: /api/buscar?q=${query}`);
 
   if (!query) {
-    return res.status(400).json({
+    return res.status(400).json({      
       erro: "Informe o parâmetro ?q=consulta"
     });
   }
@@ -74,6 +76,11 @@ export default async function handler(req, res) {
         console.error("Erro TXT:", a.url);
       }
     }
+
+    
+console.log("TERMOS:", termos);
+console.log("TOTAL ENCONTRADOS:", encontrados.length);
+
 
     return res.status(200).json({
       total_encontrados: encontrados.length,
