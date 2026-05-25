@@ -285,5 +285,31 @@ ${Object.entries(menuFinal).map(([materia, subs]) => `
 
   fs.writeFileSync(path.join(DOCS_DIR, "index.html"), indexHtml);
 
+  // ✅ INDEX COMPLETO PARA IA (RAG)
+  const BASE_URL = "https://hitalodiniz.github.io/agente-ia-ccmg";
+
+  const index = resultados.map(a => {
+
+    const fileName = gerarNomeArquivo(a.acordao);
+
+    const url = `${BASE_URL}/${slug(a.materia)}/${slug(a.subtitulo)}/${slug(a.resultado_material)}/${slug(a.topico)}/${fileName}.txt`;
+
+    return {
+      acordao: a.acordao,
+      data: a.data,
+      materia: a.materia,
+      subtitulo: a.subtitulo,
+      topico: a.topico,
+      resultado: a.resultado_material,
+      url: url,                   // 🔥 ESSENCIAL
+      resumo: a.texto_completo   // ajuda na busca
+    };
+  });
+
+  fs.writeFileSync(
+    path.join(DOCS_DIR, "index.json"),
+    JSON.stringify(index, null, 2)
+  );
+  
   console.log("✅ Sistema completo corrigido!");
 });
