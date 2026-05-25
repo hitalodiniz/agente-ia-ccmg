@@ -82,11 +82,11 @@ console.log("TERMOS:", termos);
 console.log("TOTAL ENCONTRADOS:", encontrados.length);
 
 
-    return res.status(200).json({
-      total_encontrados: encontrados.length,
-      retornados: resultados.length,
-      resultados
-    });
+console.log("RETORNANDO:", resultados.length);
+
+
+return res.status(200).json(resultados);
+
 
   } catch (err) {
     console.error("Erro geral:", err);
