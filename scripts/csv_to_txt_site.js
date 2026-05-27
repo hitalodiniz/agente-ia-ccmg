@@ -1,25 +1,33 @@
-const fs = require("fs");
+/**
+ * Gerador de site CCMG — otimizado para Copilot Studio Agent Builder
+ *
+ * Estratégia:
+ * - O Agent Builder recebe uma URL pública (GitHub Pages) como fonte de conhecimento
+ * - Ele rastreia as páginas a partir do index.html seguindo os links
+ * - Cada página de tema deve conter TODAS as ementas em texto corrido numa única URL
+ * - HTML simples e limpo, sem JavaScript, sem CSS externo — só texto que o agente consegue ler
+ *
+ * Estrutura gerada:
+ * /docs/
+ *   index.html                        ← lista todos os temas com links
+ *   temas/<materia>/<subtitulo>.html  ← 1 página por tema, com todas as ementas completas
+ */
+
+"use strict";
+
+const fs  = require("fs");
 const path = require("path");
-const csv = require("csv-parser");
+const csv  = require("csv-parser");
 
-const resultados = [];
+// ─── Configuração ─────────────────────────────────────────────────────────────
 
-const OUTPUT_TXT = "../data/txt";
+const CSV_PATH = "../data/acordaos.csv";
 const DOCS_DIR = "../docs";
 
-// limpar docs
-if (fs.existsSync(DOCS_DIR)) {
-  fs.rmSync(DOCS_DIR, { recursive: true, force: true });
-}
-fs.mkdirSync(DOCS_DIR, { recursive: true });
+// ─── Utilitários ──────────────────────────────────────────────────────────────
 
-if (!fs.existsSync(OUTPUT_TXT)) {
-  fs.mkdirSync(OUTPUT_TXT, { recursive: true });
-}
-
-// utils
-function limparTexto(txt) {
-  if (!txt) return null;
+function limpar(txt) {
+  if (!txt) return "";
   return txt.replace(/¶/g, " ").replace(/\s+/g, " ").trim();
 }
 
@@ -27,330 +35,201 @@ function slug(str) {
   return (str || "outros")
     .toLowerCase()
     .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\w\s]/g, "")
     .replace(/\s+/g, "_");
 }
 
 function extrairResultado(texto) {
-  if (!texto) return "outro";
+  if (!texto) return "Outro";
   const t = texto.toLowerCase();
-
-  if (t.includes("lançamento parcialmente procedente")) return "parcialmente_procedente";
-  if (t.includes("lançamento improcedente")) return "improcedente";
-  if (t.includes("lançamento procedente")) return "procedente";
-
-  if (t.includes("impugnação procedente")) return "improcedente";
-  if (t.includes("impugnação parcialmente procedente")) return "parcialmente_procedente";
-  if (t.includes("impugnação improcedente")) return "procedente";
-
-  if (t.includes("nulo")) return "nulo";
-
-  if (t.includes("não provido") || t.includes("nao provido")) return "mantido";
-  if (t.includes("provido")) return "reformado";
-
-  return "outro";
+  if (t.includes("parcialmente procedente")) return "Parcialmente procedente";
+  if (t.includes("lançamento procedente"))   return "Procedente";
+  if (t.includes("lançamento improcedente")) return "Improcedente";
+  if (t.includes("impugnação procedente"))   return "Improcedente";
+  if (t.includes("impugnação improcedente")) return "Procedente";
+  if (t.includes("não provido"))             return "Mantido";
+  if (t.includes("provido"))                 return "Reformado";
+  if (t.includes("nulo"))                    return "Nulo";
+  return "Outro";
 }
 
-function parseData(data) {
-  if (!data) return null;
-  const p = data.split("/");
-  if (p.length === 3) return new Date(p[2], p[1] - 1, p[0]);
-  return new Date(data);
+function classificar(resultado) {
+  const r = (resultado || "").toLowerCase();
+  if (r === "procedente")                return "Favorável ao Fisco";
+  if (r === "improcedente" || r === "reformado") return "Favorável ao Contribuinte";
+  if (r === "parcialmente procedente")   return "Parcialmente favorável ao Fisco";
+  return "Indefinido";
 }
 
-function formatarData(d) {
-  if (!d) return "N/A";
+function gerarLinkPDF(acordao) {
+  // Extrai câmara e ano do número do acórdão
+  // Ex: "22357202ª" → câmara 2, ano 2020
+  const match = acordao.match(/(\d{2})(ª|\d?CE)$/i);
+  if (!match) return null;
+  const ano    = "20" + match[1];
+  const camara = acordao.replace(/\D/g, "").slice(-3, -2);
+  const numero = acordao.replace(/[^\w]/g, "");
+  if (!camara || !ano) return null;
+  return `https://www.fazenda.mg.gov.br/secretaria/conselho_contribuintes/acordaos/${ano}/${camara}/${numero}.pdf`;
+}
+
+function formatarData(str) {
+  if (!str) return "N/A";
+  const d = new Date(str);
+  if (isNaN(d)) return str;
   return d.toLocaleDateString("pt-BR");
 }
 
-function gerarNomeArquivo(acordao) {
-  return (acordao || "desconhecido")
-    .replace(/[^\w]/g, "")
-    .toLowerCase();
+function tese(acordaos) {
+  const proc   = acordaos.filter(a => a.resultado === "Procedente").length;
+  const improc = acordaos.filter(a => a.resultado === "Improcedente").length;
+  const total  = acordaos.length;
+
+  if (proc > 0 && improc === 0)
+    return { tese: "Entendimento uniforme favorável ao Fisco.", padrao: "Uniforme — favorável ao Fisco" };
+  if (improc > 0 && proc === 0)
+    return { tese: "Entendimento uniforme favorável ao Contribuinte.", padrao: "Uniforme — favorável ao Contribuinte" };
+  if (proc > improc)
+    return { tese: "Predominância de decisões favoráveis ao Fisco.", padrao: "Predominância favorável ao Fisco" };
+  if (improc > proc)
+    return { tese: "Predominância de decisões favoráveis ao Contribuinte.", padrao: "Predominância favorável ao Contribuinte" };
+  return { tese: "Entendimento divergente.", padrao: "Divergente" };
 }
 
-function gerarTexto(obj) {
-  return `
-ACÓRDÃO: ${obj.acordao}
-DATA: ${obj.data}
+// ─── HTML mínimo — só o que o Copilot precisa ler ─────────────────────────────
+// Sem CSS externo, sem JS, sem dependências.
+// Texto estruturado em HTML semântico simples.
 
-MATÉRIA: ${obj.materia}
-SUBTÍTULO: ${obj.subtitulo}
-TÓPICO: ${obj.topico}
+function paginaTema(materia, subtitulo, acordaos) {
+  const { tese: teseTexto, padrao } = tese(acordaos);
+  const total = acordaos.length;
 
-RESULTADO:
-${obj.resultado}
+  const stats = {};
+  acordaos.forEach(a => { stats[a.resultado] = (stats[a.resultado] || 0) + 1; });
+  const dist = Object.entries(stats).map(([k, v]) => `${k}: ${v}`).join(" | ");
 
-EMENTA:
-${obj.ementa}
-`.trim();
-}
+  const ementas = acordaos.map(a => {
+    const classif = classificar(a.resultado);
+    const link    = gerarLinkPDF(a.acordao);
+    return `
+<article>
+<h3>Acórdão: ${a.acordao}</h3>
+<p>Data: ${formatarData(a.data)}</p>
+<p>Tópico: ${a.topico}</p>
+<p>Resultado: ${a.resultado}</p>
+<p>Classificação: ${classif}</p>
+<p>Ementa: ${a.ementa}</p>
+${link ? `<p>PDF oficial: ${link}</p>` : ""}
+</article>`;
+  }).join("\n");
 
-// leitura CSV
-fs.createReadStream("../data/acordaos.csv")
-.pipe(csv())
-.on("data", (row) => {
-
-  const objeto = {
-    acordao: row.ACORDAO?.trim(),
-    data: row.PUBLICACAO,
-    materia: row.TITULO?.trim(),
-    subtitulo: row.SUBTITULO?.trim(),
-    topico: row.TOPICO || "[OUTROS]",
-    resultado: limparTexto(row.RESULTADO_EMENTA),
-    resultado_material: extrairResultado(row.RESULTADO_EMENTA),
-    ementa: limparTexto(row.EMENTA),
-    texto_completo: limparTexto([
-      row.TITULO,
-      row.SUBTITULO,
-      row.TOPICO,
-      row.RESULTADO_EMENTA,
-      row.EMENTA
-    ].join(" - "))
-  };
-
-  resultados.push(objeto);
-
-  const nome = gerarNomeArquivo(objeto.acordao);
-
-  fs.writeFileSync(
-    path.join(OUTPUT_TXT, `${nome}.txt`),
-    gerarTexto(objeto)
-  );
-
-  const pasta = path.join(
-    DOCS_DIR,
-    slug(objeto.materia),
-    slug(objeto.subtitulo),
-    slug(objeto.resultado_material),
-    slug(objeto.topico)
-  );
-
-  fs.mkdirSync(pasta, { recursive: true });
-
-  fs.writeFileSync(
-    path.join(pasta, `${nome}.txt`),
-    gerarTexto(objeto)
-  );
-
-})
-.on("end", () => {
-
-  console.log(`✅ Total: ${resultados.length}`);
-
-  const grupos = {};
-
-  resultados.forEach(a => {
-    const chave = `${slug(a.materia)}/${slug(a.subtitulo)}`;
-    if (!grupos[chave]) grupos[chave] = [];
-    grupos[chave].push(a);
-  });
-
-  // ✅ gerar páginas por tema
-  Object.entries(grupos).forEach(([grupo, acordaos]) => {
-
-    let minObj = null, maxObj = null;
-
-    acordaos.forEach(a => {
-      const d = parseData(a.data);
-      if (!d || isNaN(d)) return;
-
-      if (!minObj || d < parseData(minObj.data)) minObj = a;
-      if (!maxObj || d > parseData(maxObj.data)) maxObj = a;
-    });
-
-    const stats = {};
-
-    acordaos.forEach(a => {
-      const r = a.resultado_material || "outro";
-      stats[r] = (stats[r] || 0) + 1;
-    });
-
-    // ✅ gerar tese (melhorada)
-    let tese = "Indefinida";
-
-    if ((stats.procedente || 0) > (stats.improcedente || 0)) {
-      tese = "Predominância de entendimento favorável ao Fisco quanto à exigência do imposto.";
-    } else if ((stats.improcedente || 0) > (stats.procedente || 0)) {
-      tese = "Predominância de entendimento favorável ao contribuinte.";
-    }
-
-    // ✅ título legível (sem slug)
-
-    const titulo = grupo
-    .split("/")
-    .map(x => x.replace(/_/g, " "))
-    .join(" - ")
-    .toUpperCase();
-  
-
-    // ✅ ementas (ESSENCIAL para IA)
-    const ementas = acordaos.slice(0, 30).map(a => `
-      <div style="margin-bottom:20px;">
-        <h3>${a.acordao} - ${a.resultado_material}</h3>
-        <p>${(a.ementa || "").substring(0, 1000)}</p>
-      </div>
-    `).join("");
-
-
-    const palavrasChave = [
-      ...new Set(
-        (grupo.replace(/\//g, " ") + " " + acordaos.map(a => a.topico).join(" "))
-          .toLowerCase()
-          .replace(/[^\w\s]/g, " ")
-          .split(/\s+/)
-          .filter(w => w.length > 3)
-      )
-    ].slice(0, 25).join(", ");
-    
-
-    const html = `
-<!DOCTYPE html>
-<html>
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<script src="https://cdn.tailwindcss.com"></script>
-<title>${titulo}</title>
+<title>${materia} - ${subtitulo} | CCMG</title>
 </head>
+<body>
 
-<body class="bg-gray-100 text-gray-800">
-<div class="max-w-5xl mx-auto p-6">
+<h1>${materia} - ${subtitulo}</h1>
 
-<h1 class="text-2xl font-bold mb-4">${titulo}</h1>
+<h2>Síntese do entendimento do CCMG</h2>
+<p>Tese consolidada: ${teseTexto}</p>
+<p>Padrão decisório: ${padrao}</p>
+<p>Total de acórdãos: ${total}</p>
+<p>Distribuição: ${dist}</p>
 
-<p><b>Total de acórdãos:</b> ${acordaos.length}</p>
-<p><b>Período:</b> ${formatarData(minObj ? parseData(minObj.data) : null)} até ${formatarData(minObj ? parseData(maxObj.data) : null)}</p>
-
-<h2 class="text-xl font-semibold mt-6">Tese do CCMG</h2>
-<p class="mb-4">${tese}</p>
-
-
-<h2 class="text-xl font-semibold mt-6">Resumo do entendimento</h2>
-<p>
-Com base na análise dos acórdãos acima, observa-se ${tese.toLowerCase()}.
-O padrão decisório indica que a maioria das decisões segue essa orientação.
-</p>
-
-
-<h2 class="text-xl font-semibold mt-6">Distribuição dos resultados</h2>
-<pre class="bg-white p-2 rounded">${JSON.stringify(stats, null, 2)}</pre>
-
-<h2 class="text-xl font-semibold mt-6">Acórdãos relevantes</h2>
+<h2>Acórdãos e ementas completas</h2>
 ${ementas}
 
-<h2 class="text-xl font-semibold mt-6">Palavras-chave</h2>
-<p>${palavrasChave}</p>
-
-</div>
 </body>
-</html>
-`;
+</html>`;
+}
 
-    const pasta = path.join(DOCS_DIR, grupo);
-    fs.writeFileSync(path.join(pasta, "index.html"), html);
-  });
+function paginaIndex(grupos, total) {
+  const links = Object.entries(grupos)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([materia, subs]) => {
+      const subLinks = Object.entries(subs)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([sub, acs]) =>
+          `<li><a href="temas/${slug(materia)}/${slug(sub)}.html">${sub} (${acs.length} acórdãos)</a></li>`
+        ).join("\n");
+      return `<li><strong>${materia}</strong><ul>${subLinks}</ul></li>`;
+    }).join("\n");
 
-  // ✅ MENU CORRETO (CORRIGIDO)
-  const menu = {};
-  const titulosSet = new Set();
-
-  resultados.forEach(a => {
-    const m = slug(a.materia);
-    const s = a.subtitulo && a.subtitulo.trim() !== "" ? slug(a.subtitulo) : "outros";
-
-    titulosSet.add(m);
-
-    if (!menu[m]) menu[m] = new Set();
-    menu[m].add(s);
-  });
-
-  // garante TODOS os títulos
-  titulosSet.forEach(t => {
-    if (!menu[t]) {
-      menu[t] = new Set(["outros"]);
-    }
-  });
-
-  const menuFinal = {};
-  Object.entries(menu).forEach(([k, v]) => {
-    menuFinal[k] = Array.from(v).sort();
-  });
-
-  // ✅ INDEX COM TAILWIND
-  const indexHtml = `
-<!DOCTYPE html>
-<html>
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<script src="https://cdn.tailwindcss.com"></script>
-<title>Base CCMG</title>
+<title>Base de Acórdãos CCMG</title>
 </head>
+<body>
 
-<body class="bg-gray-100 text-gray-800">
+<h1>Base de Acórdãos - Conselho de Contribuintes de Minas Gerais (CCMG)</h1>
+<p>Total de acórdãos: ${total}</p>
+<p>Selecione um tema para ver as ementas completas:</p>
 
-<div class="max-w-6xl mx-auto p-6">
-
-<h1 class="text-3xl font-bold mb-4">Base de Acórdãos CCMG</h1>
-
-<p class="mb-6">Total: <b>${resultados.length}</b></p>
-
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-
-${Object.entries(menuFinal).map(([materia, subs]) => `
-  <div class="bg-white p-4 rounded shadow">
-
-    <h3 class="font-bold text-lg mb-2 text-blue-700">
-      ${materia.replace(/_/g, " ")}
-    </h3>
-
-    <ul class="text-sm space-y-1">
-      ${subs.map(sub => `
-        <li>
-          <a href="./${materia}/${sub}/index.html" class="text-blue-600 hover:underline">
-            ${sub.replace(/_/g, " ")}
-          </a>
-        </li>
-      `).join("")}
-    </ul>
-
-  </div>
-`).join("")}
-
-</div>
-
-</div>
+<ul>
+${links}
+</ul>
 
 </body>
-</html>
-`;
+</html>`;
+}
 
-  fs.writeFileSync(path.join(DOCS_DIR, "index.html"), indexHtml);
+// ─── Pipeline ─────────────────────────────────────────────────────────────────
 
-  // ✅ INDEX COMPLETO PARA IA (RAG)
-  const BASE_URL = "https://hitalodiniz.github.io/agente-ia-ccmg";
+const resultados = [];
 
-  const index = resultados.map(a => {
+if (fs.existsSync(DOCS_DIR)) fs.rmSync(DOCS_DIR, { recursive: true, force: true });
+fs.mkdirSync(path.join(DOCS_DIR, "temas"), { recursive: true });
 
-    const fileName = gerarNomeArquivo(a.acordao);
+fs.createReadStream(CSV_PATH)
+  .pipe(csv())
+  .on("data", (row) => {
+    resultados.push({
+      acordao:  (row.ACORDAO || "").trim(),
+      data:     row.PUBLICACAO,
+      materia:  limpar(row.TITULO),
+      subtitulo: limpar(row.SUBTITULO),
+      topico:   limpar(row.TOPICO) || "Outros",
+      resultado: extrairResultado(row.RESULTADO_EMENTA),
+      ementa:   limpar(row.EMENTA),
+    });
+  })
+  .on("end", () => {
 
-    const url = `${BASE_URL}/${slug(a.materia)}/${slug(a.subtitulo)}/${slug(a.resultado_material)}/${slug(a.topico)}/${fileName}.txt`;
+    // Agrupar por matéria → subtítulo
+    const grupos = {};
+    resultados.forEach(a => {
+      if (!grupos[a.materia]) grupos[a.materia] = {};
+      if (!grupos[a.materia][a.subtitulo]) grupos[a.materia][a.subtitulo] = [];
+      grupos[a.materia][a.subtitulo].push(a);
+    });
 
-    return {
-      acordao: a.acordao,
-      data: a.data,
-      materia: a.materia,
-      subtitulo: a.subtitulo,
-      topico: a.topico,
-      resultado: a.resultado_material,
-      url: url,                   // 🔥 ESSENCIAL
-      resumo: a.texto_completo   // ajuda na busca
-    };
+    // Gerar página por tema
+    let paginas = 0;
+    Object.entries(grupos).forEach(([materia, subs]) => {
+      const pasta = path.join(DOCS_DIR, "temas", slug(materia));
+      fs.mkdirSync(pasta, { recursive: true });
+
+      Object.entries(subs).forEach(([subtitulo, acordaos]) => {
+        const arquivo = path.join(pasta, `${slug(subtitulo)}.html`);
+        fs.writeFileSync(arquivo, paginaTema(materia, subtitulo, acordaos));
+        paginas++;
+      });
+    });
+
+    // Gerar index
+    fs.writeFileSync(
+      path.join(DOCS_DIR, "index.html"),
+      paginaIndex(grupos, resultados.length)
+    );
+
+    console.log(`✅ ${resultados.length} acórdãos processados`);
+    console.log(`✅ ${paginas} páginas de tema geradas`);
+    console.log(`✅ index.html gerado`);
+    console.log(`\nPróximo passo: subir /docs no GitHub Pages e adicionar a URL no campo Conhecimento do Agent Builder.`);
   });
-
-  fs.writeFileSync(
-    path.join(DOCS_DIR, "index.json"),
-    JSON.stringify(index, null, 2)
-  );
-
-  console.log("✅ Sistema completo corrigido!");
-});
