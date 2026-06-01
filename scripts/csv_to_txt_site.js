@@ -1,21 +1,6 @@
-/**
- * Gerador de site CCMG — otimizado para Copilot Studio Agent Builder
- *
- * Estratégia:
- * - O Agent Builder recebe uma URL pública (GitHub Pages) como fonte de conhecimento
- * - Ele rastreia as páginas a partir do index.html seguindo os links
- * - Cada página de tema deve conter TODAS as ementas em texto corrido numa única URL
- * - HTML simples e limpo, sem JavaScript, sem CSS externo — só texto que o agente consegue ler
- *
- * Estrutura gerada:
- * /docs/
- *   index.html                        ← lista todos os temas com links
- *   temas/<materia>/<subtitulo>.html  ← 1 página por tema, com todas as ementas completas
- */
-
 "use strict";
 
-const fs  = require("fs");
+const fs   = require("fs");
 const path = require("path");
 const csv  = require("csv-parser");
 
@@ -56,22 +41,53 @@ function extrairResultado(texto) {
 
 function classificar(resultado) {
   const r = (resultado || "").toLowerCase();
-  if (r === "procedente")                return "Favorável ao Fisco";
+  if (r === "procedente")                      return "Favorável ao Fisco";
   if (r === "improcedente" || r === "reformado") return "Favorável ao Contribuinte";
-  if (r === "parcialmente procedente")   return "Parcialmente favorável ao Fisco";
+  if (r === "parcialmente procedente")         return "Parcialmente favorável ao Fisco";
   return "Indefinido";
 }
 
+/**
+ * Gera o link PDF a partir do número do acórdão.
+ *
+ * Formato esperado do número: NNNNN{ANO2d}{CAMARA}ª
+ * Exemplos reais: 22357202ª  →  ano=2020, câmara=2
+ *                 3456221ª   →  ano=2021, câmara=1
+ *
+ * Estratégia:
+ *  - Remove todos os não-dígitos para obter a parte numérica pura.
+ *  - Os 2 últimos dígitos da parte numérica = ano (prefixado com "20").
+ *  - O dígito imediatamente antes dos 2 últimos = câmara.
+ *
+ * Ex.: "22357202ª"  →  numérico = "22357202"
+ *       últimos 2   = "02" → ano  = "2002"   ← ERRADO se < 10
+ *       Corrigido:  ano = "20" + "02" = "2002"
+ *       câmara      = dígito na posição [len-3] = "2"
+ *
+ * Atenção: acórdãos de câmaras especiais (CE) têm sufixo diferente —
+ * tratados separadamente.
+ */
 function gerarLinkPDF(acordao) {
-  // Extrai câmara e ano do número do acórdão
-  // Ex: "22357202ª" → câmara 2, ano 2020
-  const match = acordao.match(/(\d{2})(ª|\d?CE)$/i);
-  if (!match) return null;
-  const ano    = "20" + match[1];
-  const camara = acordao.replace(/\D/g, "").slice(-3, -2);
-  const numero = acordao.replace(/[^\w]/g, "");
-  if (!camara || !ano) return null;
-  return `https://www.fazenda.mg.gov.br/secretaria/conselho_contribuintes/acordaos/${ano}/${camara}/${numero}.pdf`;
+  if (!acordao) return null;
+
+  // Remove caracteres não alfanuméricos exceto letras para câmara especial
+  const soDigitos = acordao.replace(/\D/g, "");
+
+  // Precisa de pelo menos 3 dígitos: [...][camara][ano2d]
+  if (soDigitos.length < 3) return null;
+
+  const len    = soDigitos.length;
+  const ano2d  = soDigitos.slice(len - 2);          // últimos 2 dígitos
+  const camara = soDigitos.slice(len - 3, len - 2); // dígito antes dos últimos 2
+  const ano    = "20" + ano2d;
+
+  // Câmara deve ser 1 dígito numérico válido
+  if (!camara || !/^\d$/.test(camara)) return null;
+
+  // Número limpo para o nome do arquivo (sem ª, espaços etc.)
+  const numeroArquivo = acordao.replace(/[^\w]/g, "");
+
+  return `https://www.fazenda.mg.gov.br/secretaria/conselho_contribuintes/acordaos/${ano}/${camara}/${numeroArquivo}.pdf`;
 }
 
 function formatarData(str) {
@@ -81,10 +97,9 @@ function formatarData(str) {
   return d.toLocaleDateString("pt-BR");
 }
 
-function tese(acordaos) {
+function calcularTese(acordaos) {
   const proc   = acordaos.filter(a => a.resultado === "Procedente").length;
   const improc = acordaos.filter(a => a.resultado === "Improcedente").length;
-  const total  = acordaos.length;
 
   if (proc > 0 && improc === 0)
     return { tese: "Entendimento uniforme favorável ao Fisco.", padrao: "Uniforme — favorável ao Fisco" };
@@ -97,22 +112,55 @@ function tese(acordaos) {
   return { tese: "Entendimento divergente.", padrao: "Divergente" };
 }
 
-// ─── HTML mínimo — só o que o Copilot precisa ler ─────────────────────────────
-// Sem CSS externo, sem JS, sem dependências.
-// Texto estruturado em HTML semântico simples.
+// ─── Geração do index.json ────────────────────────────────────────────────────
+//
+// O agente consulta este arquivo ANTES de navegar pelas páginas HTML.
+// Cada entrada contém os metadados mínimos + a URL da página completa.
+// Isso permite que o agente filtre por tema sem precisar ler todas as páginas.
+
+function gerarIndexJson(grupos, baseUrl) {
+  const registros = [];
+
+  Object.entries(grupos).forEach(([materia, subs]) => {
+    Object.entries(subs).forEach(([subtitulo, acordaos]) => {
+      const { tese, padrao } = calcularTese(acordaos);
+      const url = `${baseUrl}/temas/${slug(materia)}/${slug(subtitulo)}.html`;
+
+      acordaos.forEach(a => {
+        registros.push({
+          numero:     a.acordao,
+          materia:    materia,
+          subtitulo:  subtitulo,
+          topico:     a.topico,
+          resultado:  a.resultado,
+          data:       a.data || "",
+          tese:       tese,
+          padrao:     padrao,
+          url:        url,            // ← URL da página com a ementa completa
+        });
+      });
+    });
+  });
+
+  return JSON.stringify(registros, null, 2);
+}
+
+// ─── HTML das páginas de tema ─────────────────────────────────────────────────
 
 function paginaTema(materia, subtitulo, acordaos) {
-  const { tese: teseTexto, padrao } = tese(acordaos);
+  const { tese: teseTexto, padrao } = calcularTese(acordaos);
   const total = acordaos.length;
 
   const stats = {};
   acordaos.forEach(a => { stats[a.resultado] = (stats[a.resultado] || 0) + 1; });
   const dist = Object.entries(stats).map(([k, v]) => `${k}: ${v}`).join(" | ");
 
-  const ementas = acordaos.map(a => {
-    const classif = classificar(a.resultado);
-    const link    = gerarLinkPDF(a.acordao);
-    return `
+  const ementas = acordaos
+    .filter(a => a.ementa)   // ignora acórdãos sem ementa
+    .map(a => {
+      const classif = classificar(a.resultado);
+      const link    = gerarLinkPDF(a.acordao);
+      return `
 <article>
 <h3>Acórdão: ${a.acordao}</h3>
 <p>Data: ${formatarData(a.data)}</p>
@@ -122,7 +170,7 @@ function paginaTema(materia, subtitulo, acordaos) {
 <p>Ementa: ${a.ementa}</p>
 ${link ? `<p>PDF oficial: ${link}</p>` : ""}
 </article>`;
-  }).join("\n");
+    }).join("\n");
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -146,6 +194,8 @@ ${ementas}
 </body>
 </html>`;
 }
+
+// ─── HTML do índice principal ─────────────────────────────────────────────────
 
 function paginaIndex(grupos, total) {
   const links = Object.entries(grupos)
@@ -179,7 +229,10 @@ ${links}
 </html>`;
 }
 
-// ─── Pipeline ─────────────────────────────────────────────────────────────────
+// ─── Pipeline principal ───────────────────────────────────────────────────────
+
+// Ajuste esta URL para a raiz do seu GitHub Pages
+const BASE_URL = "https://hitalodiniz.github.io/agente-ia-ccmg";
 
 const resultados = [];
 
@@ -190,13 +243,13 @@ fs.createReadStream(CSV_PATH)
   .pipe(csv())
   .on("data", (row) => {
     resultados.push({
-      acordao:  (row.ACORDAO || "").trim(),
-      data:     row.PUBLICACAO,
-      materia:  limpar(row.TITULO),
+      acordao:   (row.ACORDAO || "").trim(),
+      data:      row.PUBLICACAO,
+      materia:   limpar(row.TITULO),
       subtitulo: limpar(row.SUBTITULO),
-      topico:   limpar(row.TOPICO) || "Outros",
+      topico:    limpar(row.TOPICO) || "Outros",
       resultado: extrairResultado(row.RESULTADO_EMENTA),
-      ementa:   limpar(row.EMENTA),
+      ementa:    limpar(row.EMENTA),
     });
   })
   .on("end", () => {
@@ -209,7 +262,7 @@ fs.createReadStream(CSV_PATH)
       grupos[a.materia][a.subtitulo].push(a);
     });
 
-    // Gerar página por tema
+    // Gerar páginas HTML por tema
     let paginas = 0;
     Object.entries(grupos).forEach(([materia, subs]) => {
       const pasta = path.join(DOCS_DIR, "temas", slug(materia));
@@ -222,14 +275,26 @@ fs.createReadStream(CSV_PATH)
       });
     });
 
-    // Gerar index
+    // Gerar index.html
     fs.writeFileSync(
       path.join(DOCS_DIR, "index.html"),
       paginaIndex(grupos, resultados.length)
     );
 
+    // ─── NOVO: Gerar index.json ────────────────────────────────────────────
+    // Este arquivo é a porta de entrada do agente Copilot Studio.
+    // Deve estar acessível em: {BASE_URL}/index.json
+    fs.writeFileSync(
+      path.join(DOCS_DIR, "index.json"),
+      gerarIndexJson(grupos, BASE_URL)
+    );
+
     console.log(`✅ ${resultados.length} acórdãos processados`);
     console.log(`✅ ${paginas} páginas de tema geradas`);
     console.log(`✅ index.html gerado`);
-    console.log(`\nPróximo passo: subir /docs no GitHub Pages e adicionar a URL no campo Conhecimento do Agent Builder.`);
+    console.log(`✅ index.json gerado → ${BASE_URL}/index.json`);
+    console.log(`\nPróximo passo: subir /docs no GitHub Pages.`);
+    console.log(`Adicione ao campo Conhecimento do Agent Builder:`);
+    console.log(`  ${BASE_URL}/index.json`);
+    console.log(`  ${BASE_URL}/index.html`);
   });
